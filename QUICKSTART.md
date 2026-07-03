@@ -8,47 +8,51 @@ git clone https://github.com/tri-feeldx/AI_PIPELINE_5.git
 cd AI_PIPELINE_5
 git checkout submit-minimal
 
-# Cài Python packages
-pip install pymupdf shapely pydantic dataclasses-json Pillow numpy scipy scikit-learn
+# Cài Python packages từ requirements.txt
+pip install -r requirements.txt
 ```
 
-## 2️⃣ Chuẩn bị file PDF (30 giây)
+## 2️⃣ Chạy Web App (Streamlit)
 
-Cần 1 file PDF bản vẽ kỹ thuật Revit (ví dụ: `drawing.pdf`):
-- GA plan (mặt bằng — có sàn tô màu)
-- Scale: 1:50 hoặc 1:100 (tùy loại bản vẽ)
+**Cách dễ nhất — giao diện web:**
 
-## 3️⃣ Chạy extraction (1 phút)
+```bash
+streamlit run app.py
+```
 
-Tạo file `test_extract.py`:
+Sau đó:
+1. Mở browser → `http://localhost:8501`
+2. Upload file PDF
+3. Chọn page + scale (1:100, 1:50, vv)
+4. Click "▶️ Run Extraction"
+5. Xem kết quả + download JSON
+
+---
+
+## 3️⃣ Chạy từ Python Script (advanced)
+
+Nếu không dùng web, tạo file `test_extract.py`:
 
 ```python
 from src.slab_v2.config import SlabV2Config
 from src.slab_v2.pipeline import extract_slabs_v2
 
-# Config
 cfg = SlabV2Config(
     debug_images=False,
-    manual_scale=100  # ← thay số tỉ lệ bản vẽ ở đây
+    manual_scale=100  # 1:100 scale
 )
 
-# Chạy
 result = extract_slabs_v2(
     pdf_path="drawing.pdf",
-    page_index=10,        # ← trang muốn extract (0-based)
+    page_index=10,
     config=cfg,
     use_ai=False
 )
 
-# Kết quả
 print(f"Status: {result.status}")
 print(f"Slabs: {len(result.slabs)}")
 print(f"Columns: {len(result.columns)}")
 print(f"Walls: {len(result.walls)}")
-
-if result.status == "OK":
-    total_area = sum(s.get('area_m2', 0) for s in result.slabs)
-    print(f"Total slab area: {total_area:.1f} m²")
 ```
 
 Chạy:
@@ -56,43 +60,9 @@ Chạy:
 python test_extract.py
 ```
 
-**Kỳ vọng output:**
-```
-Status: OK
-Slabs: 1
-Columns: 15
-Walls: 12
-Total slab area: 3450.5 m²
-```
+---
 
-## 4️⃣ Xuất kết quả (nếu cần)
-
-```python
-import json
-
-# Thêm vào test_extract.py
-output = {
-    "page": result.page_index + 1,
-    "status": result.status,
-    "slabs_count": len(result.slabs),
-    "slabs_area_m2": sum(s.get('area_m2', 0) for s in result.slabs),
-    "columns_count": len(result.columns),
-    "walls_count": len(result.walls),
-}
-
-with open("result.json", "w") as f:
-    json.dump(output, f, indent=2)
-
-print("✓ Saved to result.json")
-```
-
-Chạy lại:
-```bash
-python test_extract.py
-cat result.json
-```
-
-## 5️⃣ Batch processing (nhiều trang)
+## 4️⃣ Batch processing (nhiều trang)
 
 ```python
 for page_idx in range(5):  # trang 1-5
@@ -107,23 +77,28 @@ for page_idx in range(5):  # trang 1-5
 
 ## ❓ FAQ
 
-**Q: Làm sao biết tỉ lệ bản vẽ?**
-- Thường viết trên title block: "1:100" hay "1:50"
-- Nếu không biết → thử `manual_scale=100` (phổ biến nhất)
+**Q: Dùng web hay script?**
+- **Web (Streamlit)** → dễ, upload click-click, xem kết quả liền
+- **Script** → batch nhanh, tự động hóa được
 
-**Q: Kết quả sai sao?**
-- Check: Trang đó là GA plan (mặt bằng) không?
-- Check: Sàn có được tô màu (filled) không? (không phải dashed)
+**Q: Làm sao biết scale bản vẽ?**
+- Thường viết: "1:100" hay "1:50" trên title block
+- Nếu không biết → thử 100 trước (phổ biến nhất)
+
+**Q: Kết quả sai?**
+- Check: Trang là GA plan (mặt bằng) chứ?
+- Check: Sàn tô màu chưa? (không phải dashed line)
 - Check: Scale có đúng không?
 
-**Q: Mất bao lâu?**
-- ~10-30 giây per trang
-- Phụ thuộc độ phức tạp bản vẽ
+**Q: Lỗi khi install?**
+- Windows: Bạn dùng Python 3.9+ chưa? `python --version`
+- Streamlit không cài được? → `pip install --upgrade pip` rồi retry
 
 ---
 
-## 📊 Output chi tiết
+## 📊 Output
 
+Kết quả trả về JSON:
 ```json
 {
   "page": 11,
@@ -131,17 +106,19 @@ for page_idx in range(5):  # trang 1-5
   "slabs_count": 1,
   "slabs_area_m2": 3450.5,
   "columns_count": 15,
-  "walls_count": 12
+  "columns": { "C1": {...}, "C2": {...} },
+  "walls_count": 12,
+  "walls": { "W1": {...}, "W2": {...} }
 }
 ```
 
 - `status="OK"` → thành công
-- `columns_count` → số cột phát hiện (từ schedule)
-- `walls_count` → số tường phát hiện (từ schedule)
+- `slabs_area_m2` → tổng diện tích sàn
+- `columns` → từ COLUMN SCHEDULE của trang
+- `walls` → từ WALL SCHEDULE của trang
 
 ---
 
-**Version**: 1.0 (Slab + Columns + Walls extraction)
-**Last updated**: 2026-07-03
+**Version**: 1.0 (Slab + Columns + Walls)
 **Repo**: https://github.com/tri-feeldx/AI_PIPELINE_5
 

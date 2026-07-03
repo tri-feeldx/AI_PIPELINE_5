@@ -1,53 +1,161 @@
-"""
-Feeldx Slab Extractor — Streamlit App
-Phase 1: PDF Structural → SketchUp 3D Slabs
-"""
-
-import io
-import os
-import uuid
-import math
+"""Streamlit UI — upload PDF, extract slabs/columns/walls, view results."""
 import json
 import tempfile
 from pathlib import Path
-from datetime import datetime
 
 import streamlit as st
-import pandas as pd
-from PIL import Image
+from src.slab_v2.config import SlabV2Config
+from src.slab_v2.pipeline import extract_slabs_v2
 
-# ── compatibility shim ─────────────────────────────────────────────────────────
-def _rerun():
+
+st.set_page_config(page_title="Structural PDF Extraction", layout="wide")
+st.title("🏗️ Structural PDF Extraction Tool")
+
+# Sidebar: config
+with st.sidebar:
+    st.header("⚙️ Configuration")
+    manual_scale = st.slider(
+        "Drawing Scale (1:N)",
+        min_value=25,
+        max_value=500,
+        value=100,
+        step=25,
+        help="Check title block of your PDF"
+    )
+    debug_images = st.checkbox("Debug Images", value=False)
+    use_ai = st.checkbox("Use AI Selection", value=False, help="Slower but may improve accuracy")
+
+# Main: file upload
+col1, col2 = st.columns([2, 1])
+
+with col1:
+    st.subheader("📄 Upload PDF")
+    uploaded_file = st.file_uploader("Choose a structural PDF", type=["pdf"])
+
+if uploaded_file:
+    # Save temp file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(uploaded_file.getvalue())
+        tmp_path = tmp.name
+
     try:
-        st.rerun()
-    except AttributeError:
-        st.experimental_rerun()
+        # Get page count
+        import fitz
+        pdf_doc = fitz.open(tmp_path)
+        num_pages = len(pdf_doc)
+        pdf_doc.close()
 
-# ── page config ────────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Feeldx Slab Extractor",
-    page_icon="🏗️",
-    layout="wide",
-    initial_sidebar_state="expanded",
+        with col2:
+            st.subheader("📑 Select Page")
+            page_idx = st.number_input(
+                "Page number (1-indexed)",
+                min_value=1,
+                max_value=num_pages,
+                value=1
+            ) - 1
+
+        # Run extraction
+        st.subheader("🔍 Extract")
+        if st.button("▶️ Run Extraction", type="primary", use_container_width=True):
+            with st.spinner("Processing... (10-30 seconds)"):
+                cfg = SlabV2Config(
+                    debug_images=debug_images,
+                    manual_scale=manual_scale
+                )
+                result = extract_slabs_v2(
+                    pdf_path=tmp_path,
+                    page_index=page_idx,
+                    config=cfg,
+                    use_ai=use_ai
+                )
+
+            # Display results
+            st.success("✅ Extraction complete!")
+
+            # Metrics
+            col_a, col_b, col_c, col_d = st.columns(4)
+            with col_a:
+                st.metric("Status", result.status)
+            with col_b:
+                st.metric("Slabs", len(result.slabs))
+            with col_c:
+                st.metric("Columns", len(result.columns))
+            with col_d:
+                st.metric("Walls", len(result.walls))
+
+            # Details
+            tabs = st.tabs(["📊 Slabs", "🔶 Columns", "🧱 Walls", "📋 Raw JSON"])
+
+            with tabs[0]:
+                if result.slabs:
+                    for i, slab in enumerate(result.slabs):
+                        with st.expander(f"Slab {i+1}", expanded=(i==0)):
+                            st.json(slab)
+                else:
+                    st.info("No slabs detected")
+
+            with tabs[1]:
+                if result.columns:
+                    col_df = []
+                    for mark, col_info in result.columns.items():
+                        col_df.append({
+                            "Mark": mark,
+                            "Type": col_info.get("type", "?"),
+                            "Size": col_info.get("size_mm", "?"),
+                            "X": col_info.get("x_mm", "?"),
+                            "Y": col_info.get("y_mm", "?"),
+                        })
+                    st.dataframe(col_df, use_container_width=True)
+                else:
+                    st.info("No columns detected")
+
+            with tabs[2]:
+                if result.walls:
+                    wall_df = []
+                    for mark, wall_info in result.walls.items():
+                        wall_df.append({
+                            "Mark": mark,
+                            "Type": wall_info.get("type", "?"),
+                            "Thickness": wall_info.get("thickness_mm", "?"),
+                        })
+                    st.dataframe(wall_df, use_container_width=True)
+                else:
+                    st.info("No walls detected")
+
+            with tabs[3]:
+                output_json = {
+                    "page": page_idx + 1,
+                    "status": result.status,
+                    "slabs_count": len(result.slabs),
+                    "slabs_area_m2": sum(s.get('area_m2', 0) for s in result.slabs),
+                    "columns_count": len(result.columns),
+                    "columns": result.columns,
+                    "walls_count": len(result.walls),
+                    "walls": result.walls,
+                }
+                st.json(output_json)
+
+                # Download button
+                st.download_button(
+                    label="⬇️ Download JSON",
+                    data=json.dumps(output_json, indent=2),
+                    file_name=f"result_p{page_idx+1}.json",
+                    mime="application/json"
+                )
+
+    except Exception as e:
+        st.error(f"❌ Error: {str(e)}")
+        st.exception(e)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+else:
+    st.info("👈 Upload a PDF to get started")
+
+st.divider()
+st.caption(
+    "Version 1.0 | [Repo](https://github.com/tri-feeldx/AI_PIPELINE_5) "
+    "| [Docs](https://github.com/tri-feeldx/AI_PIPELINE_5/blob/submit-minimal/QUICKSTART.md)"
 )
-
-# ── custom CSS ─────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-  /* Global */
-  html, body, [class*="css"] { font-size: 15px; }
-  .main .block-container { padding: 2rem 2.5rem 2rem 2.5rem; max-width: 1400px; }
-
-  /* Step header */
-  .step-header {
-    font-size: 1.6rem; font-weight: 800; color: #4FC3F7;
-    padding: 10px 0 4px 0; letter-spacing: 0.02em;
-    border-bottom: 2px solid #1e3a5f; margin-bottom: 12px;
-  }
-
-  /* Info boxes */
-  .info-box {
-    background: #0f2035; border-left: 5px solid #4FC3F7;
     padding: 14px 18px; border-radius: 6px; margin: 10px 0;
     font-size: 1.0rem; line-height: 1.6;
   }
